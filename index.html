@@ -69,6 +69,32 @@ h1,h2,h3,.display{ font-family:'Cinzel',serif; letter-spacing:.03em; }
 .discard-strip{ display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; justify-content:center; }
 .discard-strip .mini{ width:30px; height:40px; border-radius:4px; background:var(--parchment); border:1px solid var(--accent,#8a7527); color:var(--parchment-ink); font-family:'Cinzel',serif; font-weight:700; font-size:.85rem; display:flex; align-items:center; justify-content:center; }
 
+.turn-banner{ display:flex; justify-content:space-between; align-items:center; gap:14px; background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:12px 16px; margin-bottom:14px; }
+.turn-banner.human{ border-color:var(--gold); box-shadow:0 0 0 1px rgba(201,162,39,.25) inset; }
+.turn-banner.ai{ border-color:#5a5478; }
+.tb-who{ font-family:'Cinzel',serif; font-size:1rem; letter-spacing:.05em; white-space:nowrap; }
+.turn-banner.human .tb-who{ color:var(--gold); }
+.turn-banner.ai .tb-who{ color:#b3aee0; }
+.tb-last{ font-size:.85rem; color:var(--ink-dim); text-align:right; }
+
+.discard-section{ display:flex; gap:10px; margin-top:12px; padding-top:10px; border-top:1px dashed var(--line); }
+.discard-box{ flex:1; background:#171425; border:1px solid #3a3552; border-radius:8px; padding:8px 10px; min-height:56px; }
+.discard-box .discard-header{ font-size:.68rem; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-dim); margin-bottom:6px; }
+.discard-box .discard-empty{ font-size:.72rem; color:#6a648a; font-style:italic; }
+.discard-box .strip{ display:flex; gap:5px; flex-wrap:wrap; }
+.discard-box .mini{ width:28px; height:38px; border-radius:4px; background:var(--parchment); border:1px solid var(--accent,#8a7527); color:var(--parchment-ink); font-family:'Cinzel',serif; font-weight:700; font-size:.8rem; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+
+.recent-list{ display:flex; flex-direction:column; gap:0; }
+.recent-item{ padding:8px 2px; border-bottom:1px dashed var(--line); font-size:.86rem; line-height:1.4; color:var(--ink); }
+.recent-item:nth-child(1){ font-size:.92rem; color:#fff; }
+.recent-item:nth-child(2){ opacity:.85; }
+.recent-item:nth-child(3){ opacity:.68; }
+.recent-item:nth-child(4){ opacity:.52; }
+.recent-item:nth-child(5){ opacity:.4; }
+.recent-item:last-child{ border-bottom:none; }
+.full-log{ max-height:260px; overflow-y:auto; margin-top:8px; border-top:1px solid var(--line); padding-top:8px; }
+.full-log .entry{ padding:4px 0; font-size:.76rem; color:var(--ink-dim); border-bottom:1px dashed var(--line); }
+
 .action-panel{ background:var(--panel); border:1px solid var(--gold-dim); border-radius:10px; padding:16px; min-height:70px; }
 .action-panel .prompt{ font-family:'Cinzel',serif; color:var(--gold); font-size:.9rem; margin-bottom:10px; letter-spacing:.03em; }
 .btn{
@@ -132,6 +158,15 @@ const SANCTUARY_DEF = { name:'Sanctuary', tag:'Safehouse Identity', accent:'#9C9
 function defFor(rank){ return rank===0 ? SANCTUARY_DEF : CARD_DEFS[rank]; }
 function powerScore(rank){ return ({1:1,2:3,3:2,4:2,5:3,6:4,7:4,8:5,9:8,10:9})[rank] || 0; }
 
+/* ---------- Pacing (readability delays, no rule changes) ---------- */
+const PACE = {
+  playToAbility: 1000,  // pause between "X plays Y" and the ability's effect resolving
+  subStep: 1000,        // pause between an ability's intermediate reveal and its outcome
+  turnGap: 900,          // pause before the next player's turn begins
+  aiThink: 1000,         // pause before the AI acts after drawing
+  gameOverReveal: 1000   // pause before the final "Play Again" panel appears
+};
+
 /* ---------- State ---------- */
 let state = null;
 
@@ -151,7 +186,7 @@ function log(msg){ state.log.unshift(msg); if(state.log.length>80) state.log.pop
 function initGame(){
   state = {
     deck: shuffle(buildDeck()),
-    discard: [],
+    discardPiles: { human: [], ai: [] },
     sanctuary: null,
     players: {
       human: { name:'You', hand:[], protected:false, eliminated:false, pendingArchivist:false },
@@ -163,7 +198,9 @@ function initGame(){
     pending:{type:'none'},
     gameOver:false,
     aiKnowledge:{ humanRank:null },
-    showRef:false
+    showRef:false,
+    showFullLog:false,
+    showGameOverPanel:false
   };
   state.players.human.hand.push(state.deck.pop());
   state.players.ai.hand.push(state.deck.pop());
@@ -189,7 +226,7 @@ function startTurn(p){
   player.hand.push(card);
   log(`${player.name} draws a letter. (${state.deck.length} left in the case)`);
   if(p==='human'){ state.pending={type:'chooseCard'}; render(); }
-  else { render(); setTimeout(aiChooseAndPlay, 850); }
+  else { render(); setTimeout(aiChooseAndPlay, PACE.aiThink); }
 }
 
 function doArchivistDraw(p){
@@ -205,7 +242,7 @@ function doArchivistDraw(p){
   for(const c of rest) state.deck.push(c);
   log(`${player.name} keeps one letter and returns the rest to the top of the case.`);
   render();
-  setTimeout(aiChooseAndPlay, 850);
+  setTimeout(aiChooseAndPlay, PACE.aiThink);
 }
 
 function confirmArchivistKeep(theUid){
@@ -241,11 +278,12 @@ function aiChooseAndPlay(){
 function playCard(p, idx){
   const player = state.players[p];
   const card = player.hand.splice(idx,1)[0];
-  state.discard.push(card);
+  state.discardPiles[p].push(card);
   const def = defFor(card.rank);
   log(`${player.name} plays ${def.name} (${card.rank}) — "${def.tag}"`);
   state.pending = {type:'none'};
-  resolveAbility(p, card);
+  render();
+  setTimeout(()=>resolveAbility(p, card), PACE.playToAbility);
 }
 
 /* ---------- Abilities ---------- */
@@ -289,17 +327,21 @@ function resolveAbility(p, card){
       const drawn = state.deck.pop(); oppPlayer.hand.push(drawn);
       log(`${oppPlayer.name} is forced to draw for the Quarantine.`);
       if(p==='human'){ state.pending={type:'blindPick', target:opp}; render(); return; }
-      resolveBlindPick('ai', opp, Math.floor(Math.random()*2));
+      render();
+      setTimeout(()=>resolveBlindPick('ai', opp, Math.floor(Math.random()*2)), PACE.subStep);
       return;
     }
     case 6: {
       if(oppPlayer.protected){ log(`${oppPlayer.name} is shielded by the Warden — the Duel is refused.`); finishAbility(); return; }
       const mine = player.hand[0], theirs = oppPlayer.hand[0];
       log(`${player.name} calls a Formal Duel!`);
+      render();
+      setTimeout(()=>{
       if(mine.rank===theirs.rank){ log('Both reveal the same rank — a stalemate. No one falls.'); }
       else if(mine.rank>theirs.rank){ eliminate(opp, `${oppPlayer.name}'s ${defFor(theirs.rank).name} falls to ${player.name}'s ${defFor(mine.rank).name}.`); }
       else { eliminate(p, `${player.name}'s ${defFor(mine.rank).name} falls to ${oppPlayer.name}'s ${defFor(theirs.rank).name}.`); }
       finishAbility();
+      }, PACE.subStep);
       return;
     }
     case 7: {
@@ -336,16 +378,19 @@ function beginRegentTrial(actor, target){
   targetP.hand.push(drawn);
   log(`${targetP.name} draws for the Trial and must reveal both letters.`);
   if(actor==='human'){ state.pending = {type:'regentChoice', target}; render(); return; }
-  const opts = targetP.hand;
-  const heirIdx = opts.findIndex(c=>c.rank===10);
-  const chooseIdx = heirIdx>=0 ? heirIdx : (powerScore(opts[0].rank) >= powerScore(opts[1].rank) ? 0 : 1);
-  resolveRegentDiscard(target, chooseIdx);
+  render();
+  setTimeout(()=>{
+    const opts = targetP.hand;
+    const heirIdx = opts.findIndex(c=>c.rank===10);
+    const chooseIdx = heirIdx>=0 ? heirIdx : (powerScore(opts[0].rank) >= powerScore(opts[1].rank) ? 0 : 1);
+    resolveRegentDiscard(target, chooseIdx);
+  }, PACE.subStep);
 }
 
 function resolveRegentDiscard(target, idx){
   const targetP = state.players[target];
   const card = targetP.hand.splice(idx,1)[0];
-  state.discard.push(card);
+  state.discardPiles[target].push(card);
   if(card.rank===10){ log(`The Exiled Heir is exposed and cast out by the Trial — no reincarnation can save it now.`); }
   else { log(`${targetP.name} is forced to discard ${defFor(card.rank).name} (${card.rank}).`); }
   finishAbility();
@@ -361,27 +406,35 @@ function resolveBlindPick(actor, target, idx){
     log(`${targetP.name} reveals... the Exiled Heir! Reincarnation triggers — they draw the Sanctuary card and remain in the game.`);
   } else {
     targetP.hand.splice(idx,1);
-    state.discard.push(card);
+    state.discardPiles[target].push(card);
     log(`${targetP.name} was forced to discard ${defFor(card.rank).name} (${card.rank}), chosen blindly.`);
   }
   finishAbility();
 }
 
 function resolveInformantGuess(actor, guessRank){
+  if(actor==='human'){
+    if(state.pending.type!=='informantGuess') return; // guard against double-click
+  }
   const target = opponentOf(actor);
   const targetP = state.players[target], actorP = state.players[actor];
   const actualRank = targetP.hand[0].rank;
   log(`${actorP.name} accuses: "You hold ${defFor(guessRank).name}!"`);
-  if(guessRank === actualRank){ eliminate(target, `The accusation is true — ${targetP.name} is exposed and eliminated!`); }
-  else { log(`Wrong — ${targetP.name} breathes easy.`); }
-  finishAbility();
+  state.pending = {type:'resolving'};
+  render();
+  setTimeout(()=>{
+    if(guessRank === actualRank){ eliminate(target, `The accusation is true — ${targetP.name} is exposed and eliminated!`); }
+    else { log(`Wrong — ${targetP.name} breathes easy.`); }
+    finishAbility();
+  }, PACE.subStep);
 }
 
 function aiGuessRank(){
   if(state.aiKnowledge.humanRank && state.aiKnowledge.humanRank>=2) return state.aiKnowledge.humanRank;
   const counts={};
   for(let r=2;r<=10;r++) counts[r]=CARD_DEFS[r].copies;
-  for(const c of state.discard) if(counts[c.rank]!==undefined) counts[c.rank]--;
+  const allDiscards = state.discardPiles.human.concat(state.discardPiles.ai);
+  for(const c of allDiscards) if(counts[c.rank]!==undefined) counts[c.rank]--;
   for(const c of state.players.ai.hand) if(counts[c.rank]!==undefined) counts[c.rank]--;
   let pool=[];
   for(let r=2;r<=10;r++) for(let i=0;i<Math.max(counts[r],0);i++) pool.push(r);
@@ -408,17 +461,24 @@ function endByComparison(){
   else endGame('A perfect tie in standing — the throne remains empty. It\’s a draw.');
 }
 
-function endGame(msg){ state.gameOver = true; log(msg); render(); }
+function endGame(msg){
+  state.gameOver = true;
+  state.showGameOverPanel = false;
+  log(msg);
+  render();
+  setTimeout(()=>{ state.showGameOverPanel = true; render(); }, PACE.gameOverReveal);
+}
 
 function finishAbility(){
   state.pending = {type:'none'};
   if(state.gameOver){ render(); return; }
   const next = opponentOf(state.turn);
   render();
-  setTimeout(()=>startTurn(next), state.turn==='human' ? 550 : 900);
+  setTimeout(()=>startTurn(next), PACE.turnGap);
 }
 
 function toggleRef(){ state.showRef = !state.showRef; render(); }
+function toggleLog(){ state.showFullLog = !state.showFullLog; render(); }
 
 /* ---------- Render ---------- */
 function render(){
@@ -438,16 +498,23 @@ function render(){
     </div>`;
   }).join('');
 
-  const discardHTML = state.discard.slice().reverse().map(c=>{
-    const def=defFor(c.rank);
-    return `<div class="mini" style="--accent:${def.accent}" title="${def.name}">${c.rank}</div>`;
-  }).join('');
+  function discardBoxHTML(pile){
+    if(pile.length===0) return `<div class="discard-empty">No cards discarded yet</div>`;
+    return `<div class="strip">` + pile.slice().reverse().map(c=>{
+      const def=defFor(c.rank);
+      return `<div class="mini" style="--accent:${def.accent}" title="${def.name} (${c.rank})">${c.rank}</div>`;
+    }).join('') + `</div>`;
+  }
 
   let actionHTML = '';
   if(state.gameOver){
-    actionHTML = `<div class="gameover"><h2>${state.log[0]}</h2><button class="btn primary" onclick="initGame()">Play Again</button></div>`;
+    actionHTML = state.showGameOverPanel
+      ? `<div class="gameover"><h2>${state.log[0]}</h2><button class="btn primary" onclick="initGame()">Play Again</button></div>`
+      : `<div class="prompt">${state.log[0] || ''}</div>`;
   } else if(state.turn!=='human'){
     actionHTML = `<div class="prompt">${a.name} is deciding...</div>`;
+  } else if(state.pending.type==='resolving'){
+    actionHTML = `<div class="prompt">Resolving...</div>`;
   } else if(state.pending.type==='chooseCard'){
     actionHTML = `<div class="prompt">Choose a letter to play</div><div>Click one of your two cards above.</div>`;
   } else if(state.pending.type==='informantGuess'){
@@ -479,7 +546,15 @@ function render(){
     actionHTML = `<div class="prompt">...</div>`;
   }
 
-  const logHTML = state.log.map(l=>`<div class="entry">${l}</div>`).join('');
+  const recentHTML = state.log.slice(0,5).map(l=>`<div class="recent-item">${l}</div>`).join('');
+  const fullLogHTML = state.showFullLog
+    ? `<div class="full-log">${state.log.map(l=>`<div class="entry">${l}</div>`).join('')}</div>`
+    : '';
+
+  const turnBannerHTML = `<div class="turn-banner ${state.turn}">
+      <div class="tb-who">${state.gameOver ? '🏁 Game Over' : (state.turn==='human' ? '▶ Your Turn' : `▶ ${a.name}'s Turn`)}</div>
+      <div class="tb-last">${state.log[0] || ''}</div>
+    </div>`;
 
   let refHTML = '';
   if(state.showRef){
@@ -494,24 +569,31 @@ function render(){
       <h1>The Empty Throne</h1>
       <div class="sub">mechanics prototype · placeholder art · 2 players</div>
     </div>
+    ${turnBannerHTML}
     <div class="layout">
       <div class="board">
         <div class="zone">
           <div class="zone-title"><span class="name">${a.name}</span><span class="status">${a.hand.length} card(s)${a.protected?'<span class=\\"shield-badge\\">Guarded</span>':''}</span></div>
           <div class="hand">${aiHandHTML}</div>
+          <div class="discard-section"><div class="discard-box"><div class="discard-header">Opponent Discard Pile</div>${discardBoxHTML(state.discardPiles.ai)}</div></div>
         </div>
         <div class="center-row">
           <div class="pile"><div class="big">${state.deck.length}</div><div class="label">Letters in case</div></div>
-          <div class="pile"><div class="big">${state.discard.length}</div><div class="label">Discarded</div><div class="discard-strip">${discardHTML}</div></div>
         </div>
         <div class="zone">
           <div class="zone-title"><span class="name">${h.name}</span><span class="status">${h.hand.length} card(s)${h.protected?'<span class=\\"shield-badge\\">Guarded</span>':''}</span></div>
           <div class="hand">${humanHandHTML}</div>
+          <div class="discard-section"><div class="discard-box"><div class="discard-header">My Discard Pile</div>${discardBoxHTML(state.discardPiles.human)}</div></div>
         </div>
         <div class="action-panel">${actionHTML}</div>
       </div>
       <div class="sidebar">
-        <div class="log-box"><div class="log-title">Court Record</div>${logHTML}</div>
+        <div class="log-box">
+          <div class="log-title">Court Record</div>
+          <div class="recent-list">${recentHTML}</div>
+          <button class="btn ref-toggle" onclick="toggleLog()" style="margin-top:8px;">${state.showFullLog?'Hide':'Show'} full record</button>
+          ${fullLogHTML}
+        </div>
         <div class="zone">
           <button class="btn ref-toggle" onclick="toggleRef()">${state.showRef?'Hide':'Show'} rank reference</button>
           ${refHTML}
